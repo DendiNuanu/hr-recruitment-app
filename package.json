@@ -13,9 +13,9 @@
     "@supabase/supabase-js": "^2.46.1",
     "clsx": "^2.1.1",
     "lucide-react": "0.456.0",
-    "next": "15.0.3",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
+    "next": "^16.0.10",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
     "sonner": "1.5.0",
     "tailwind-merge": "^2.5.4",
     "tailwindcss-animate": "^1.0.7"
