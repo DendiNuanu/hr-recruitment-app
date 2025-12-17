@@ -19,7 +19,7 @@ export default async function AdminDashboard() {
 
             <div className="bg-white shadow overflow-hidden sm:rounded-md">
                 <ul className="divide-y divide-gray-200">
-                    {jobs?.map((job) => (
+                    {jobs?.map((job: any) => (
                         <AdminJobCard key={job.id} job={job} />
                     ))}
                 </ul>
