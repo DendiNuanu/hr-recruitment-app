@@ -19,48 +19,48 @@ export const createClientServer = async () => {
         console.warn('MISSING SUPABASE KEYS: Returning mock client to prevent crash.')
         return {
             auth: {
-                getUser: Async() => ({ data: { user: null }, error: { message: 'Missing Supabase Keys' } }),
-                    getSession: async () => ({ data: { session: null }, error: null }),
-                        signOut: async () => ({ error: null }),
+                getUser: async () => ({ data: { user: null }, error: { message: 'Missing Supabase Keys' } }),
+                getSession: async () => ({ data: { session: null }, error: null }),
+                signOut: async () => ({ error: null }),
             },
-from: () => ({
-    select: () => ({
-        eq: () => ({
-            single: async () => ({ data: null, error: { message: 'Missing Supabase Keys' } }),
-            maybeSingle: async () => ({ data: null, error: null }),
-            order: () => ({ data: [], error: null }),
-        }),
-        insert: async () => ({ data: null, error: { message: 'Missing Supabase Keys' } }),
-        update: async () => ({ data: null, error: { message: 'Missing Supabase Keys' } }),
-        delete: async () => ({ data: null, error: { message: 'Missing Supabase Keys' } }),
-        order: () => ({ data: [], error: null }),
-    }),
-}),
+            from: () => ({
+                select: () => ({
+                    eq: () => ({
+                        single: async () => ({ data: null, error: { message: 'Missing Supabase Keys' } }),
+                        maybeSingle: async () => ({ data: null, error: null }),
+                        order: () => ({ data: [], error: null }),
+                    }),
+                    insert: async () => ({ data: null, error: { message: 'Missing Supabase Keys' } }),
+                    update: async () => ({ data: null, error: { message: 'Missing Supabase Keys' } }),
+                    delete: async () => ({ data: null, error: { message: 'Missing Supabase Keys' } }),
+                    order: () => ({ data: [], error: null }),
+                }),
+            }),
         } as any
     }
 
-return createServerClient(
-    supabaseUrl,
-    supabaseKey,
-    {
-        cookies: {
-            getAll() {
-                return cookieStore.getAll()
+    return createServerClient(
+        supabaseUrl,
+        supabaseKey,
+        {
+            cookies: {
+                getAll() {
+                    return cookieStore.getAll()
+                },
+                setAll(cookiesToSet: { name: string; value: string; options?: any }[]) {
+                    try {
+                        cookiesToSet.forEach(({ name, value, options }) =>
+                            cookieStore.set(name, value, options)
+                        )
+                    } catch {
+                        // The `setAll` method was called from a Server Component.
+                        // This can be ignored if you have middleware refreshing
+                        // user sessions.
+                    }
+                },
             },
-            setAll(cookiesToSet: { name: string; value: string; options?: any }[]) {
-                try {
-                    cookiesToSet.forEach(({ name, value, options }) =>
-                        cookieStore.set(name, value, options)
-                    )
-                } catch {
-                    // The `setAll` method was called from a Server Component.
-                    // This can be ignored if you have middleware refreshing
-                    // user sessions.
-                }
-            },
-        },
-    }
-)
+        }
+    )
 }
 
 // For Admin actions needing the service role (bypassing RLS or when no user session)
