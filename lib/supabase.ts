@@ -14,36 +14,53 @@ export const createClientServer = async () => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
     const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
+    // SAFE MODE: If keys are missing, return a dummy client instead of crashing
     if (!supabaseUrl || !supabaseKey) {
-        throw new Error(
-            'MISSING_SUPABASE_VARS: Your Vercel project is missing environment variables. ' +
-            'Please go to Vercel Dashboard > Settings > Environment Variables and add ' +
-            'NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.'
-        )
+        console.warn('MISSING SUPABASE KEYS: Returning mock client to prevent crash.')
+        return {
+            auth: {
+                getUser: Async() => ({ data: { user: null }, error: { message: 'Missing Supabase Keys' } }),
+                    getSession: async () => ({ data: { session: null }, error: null }),
+                        signOut: async () => ({ error: null }),
+            },
+from: () => ({
+    select: () => ({
+        eq: () => ({
+            single: async () => ({ data: null, error: { message: 'Missing Supabase Keys' } }),
+            maybeSingle: async () => ({ data: null, error: null }),
+            order: () => ({ data: [], error: null }),
+        }),
+        insert: async () => ({ data: null, error: { message: 'Missing Supabase Keys' } }),
+        update: async () => ({ data: null, error: { message: 'Missing Supabase Keys' } }),
+        delete: async () => ({ data: null, error: { message: 'Missing Supabase Keys' } }),
+        order: () => ({ data: [], error: null }),
+    }),
+}),
+        } as any
     }
 
-    return createServerClient(
-        supabaseUrl,
-        supabaseKey,
-        {
-            cookies: {
-                getAll() {
-                    return cookieStore.getAll()
-                },
-                setAll(cookiesToSet: { name: string; value: string; options?: any }[]) {
-                    try {
-                        cookiesToSet.forEach(({ name, value, options }) =>
-                            cookieStore.set(name, value, options)
-                        )
-                    } catch {
-                        // The `setAll` method was called from a Server Component.
-                        // This can be ignored if you have middleware refreshing
-                        // user sessions.
-                    }
-                },
+return createServerClient(
+    supabaseUrl,
+    supabaseKey,
+    {
+        cookies: {
+            getAll() {
+                return cookieStore.getAll()
             },
-        }
-    )
+            setAll(cookiesToSet: { name: string; value: string; options?: any }[]) {
+                try {
+                    cookiesToSet.forEach(({ name, value, options }) =>
+                        cookieStore.set(name, value, options)
+                    )
+                } catch {
+                    // The `setAll` method was called from a Server Component.
+                    // This can be ignored if you have middleware refreshing
+                    // user sessions.
+                }
+            },
+        },
+    }
+)
 }
 
 // For Admin actions needing the service role (bypassing RLS or when no user session)
