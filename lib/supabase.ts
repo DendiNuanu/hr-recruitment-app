@@ -11,9 +11,20 @@ export const createClient = () => {
 export const createClientServer = async () => {
     const cookieStore = await cookies()
 
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+    if (!supabaseUrl || !supabaseKey) {
+        throw new Error(
+            'MISSING_SUPABASE_VARS: Your Vercel project is missing environment variables. ' +
+            'Please go to Vercel Dashboard > Settings > Environment Variables and add ' +
+            'NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.'
+        )
+    }
+
     return createServerClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '',
+        supabaseUrl,
+        supabaseKey,
         {
             cookies: {
                 getAll() {
