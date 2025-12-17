@@ -68,6 +68,36 @@ export const createAdminClient = () => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 
+    if (!supabaseUrl || !serviceKey) {
+        console.warn('MISSING ADMIN KEYS: Returning mock admin client.')
+        return {
+            auth: {
+                autoRefreshToken: false,
+                persistSession: false,
+                admin: {
+                    createUser: async () => ({ data: null, error: { message: 'Missing Service Key' } }),
+                    deleteUser: async () => ({ data: null, error: { message: 'Missing Service Key' } }),
+                }
+            },
+            storage: {
+                from: () => ({
+                    upload: async () => ({ data: null, error: { message: 'Missing Service Key' } }),
+                    getPublicUrl: () => ({ data: { publicUrl: '' } }),
+                })
+            },
+            from: () => ({
+                insert: async () => ({ data: null, error: { message: 'Missing Service Key' } }),
+                update: async () => ({ data: null, error: { message: 'Missing Service Key' } }),
+                delete: async () => ({ data: null, error: { message: 'Missing Service Key' } }),
+                select: () => ({
+                    eq: () => ({
+                        single: async () => ({ data: null, error: { message: 'Missing Service Key' } }),
+                    })
+                })
+            })
+        } as any
+    }
+
     // We use standard supabase-js for the admin client as it's usually for one-off admin tasks
     const { createClient } = require('@supabase/supabase-js')
     return createClient(supabaseUrl, serviceKey, {
