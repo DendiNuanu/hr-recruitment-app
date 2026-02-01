@@ -111,10 +111,23 @@ export default function EditJobForm({ job }: { job: any }) {
                                 <label className="block text-sm font-semibold text-gray-700 mb-2">
                                     Current Job Image
                                 </label>
-                                <img src={job.job_image} alt="Job" className="w-full h-48 object-cover rounded-lg" />
-                                <p className="text-xs text-gray-500 mt-2">Note: Image cannot be changed during edit. Delete and recreate the job to change the image.</p>
+                                <img src={job.job_image} alt="Job" className="w-full h-48 object-cover rounded-lg mb-4" />
                             </div>
                         )}
+
+                        <div>
+                            <label htmlFor="job_image" className="block text-sm font-semibold text-gray-700 mb-2">
+                                {job.job_image ? 'Replace Image' : 'Job Image'}
+                            </label>
+                            <input
+                                type="file"
+                                name="job_image"
+                                id="job_image"
+                                accept="image/*"
+                                className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 transition duration-150"
+                            />
+                            {job.job_image && <p className="text-xs text-gray-500 mt-1">Upload a new image to replace the current one.</p>}
+                        </div>
 
                         <div className="flex space-x-3 pt-6 border-t">
                             <Link

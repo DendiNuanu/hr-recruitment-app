@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { updateCandidateStatus, updateCandidateNotes, deleteJobAction } from '@/app/actions';
+import { updateCandidateStatus, updateCandidateNotes, deleteJobAction, updateJobStatus } from '@/app/actions';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import { AlertTriangle, X } from 'lucide-react';
@@ -9,16 +9,29 @@ import { AlertTriangle, X } from 'lucide-react';
 export function AdminJobCard({ job }: { job: any }) {
     const [expanded, setExpanded] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [showFinalDeleteModal, setShowFinalDeleteModal] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
 
-    const handleDelete = async () => {
+    const handleDelete = () => {
+        setShowDeleteModal(false);
+        setShowFinalDeleteModal(true);
+    }
+
+    const executeFinalDelete = async () => {
         setIsDeleting(true);
         const res = await deleteJobAction(job.id);
         setIsDeleting(false);
-        setShowDeleteModal(false);
+        setShowFinalDeleteModal(false);
 
         if (res?.error) toast.error(res.error);
         else toast.success('Job deleted successfully!');
+    }
+
+    const handleToggleStatus = async () => {
+        const newStatus = job.status === 'open' ? 'closed' : 'open';
+        const res = await updateJobStatus(job.id, newStatus);
+        if (res?.error) toast.error(res.error);
+        else toast.success(`Job ${newStatus === 'open' ? 'reopened' : 'closed'} successfully`);
     }
 
     return (
@@ -41,6 +54,9 @@ export function AdminJobCard({ job }: { job: any }) {
                                 {job.candidates?.length || 0} Applicants
                             </span>
                             <div onClick={(e) => e.stopPropagation()}>
+                                <button onClick={handleToggleStatus} className={`mr-4 font-medium ${job.status === 'open' ? 'text-amber-600 hover:text-amber-900' : 'text-green-600 hover:text-green-900'}`}>
+                                    {job.status === 'open' ? 'Close' : 'Reopen'}
+                                </button>
                                 <Link href={`/HRadmin/jobs/${job.id}/edit`} className="text-indigo-600 hover:text-indigo-900 mr-4">Edit</Link>
                                 <button onClick={() => setShowDeleteModal(true)} className="text-red-600 hover:text-red-900">Delete</button>
                             </div>
@@ -119,9 +135,44 @@ export function AdminJobCard({ job }: { job: any }) {
                                     disabled={isDeleting}
                                     className="flex-1 bg-red-600 hover:bg-red-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
-                                    {isDeleting ? 'Deleting...' : 'Delete Job'}
+                                    Delete Job
                                 </button>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Final Double Confirmation Modal */}
+            {showFinalDeleteModal && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black bg-opacity-60 animate-fadeIn">
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 transform animate-scaleIn border-2 border-red-500">
+                        <div className="flex flex-col items-center text-center mb-6">
+                            <div className="flex items-center justify-center h-16 w-16 rounded-full bg-red-100 mb-4">
+                                <AlertTriangle className="h-8 w-8 text-red-600" />
+                            </div>
+                            <h3 className="text-2xl font-bold text-gray-900">
+                                Are you really sure?
+                            </h3>
+                            <p className="mt-2 text-lg text-red-600 font-medium">
+                                This will delete the data permanently!
+                            </p>
+                        </div>
+
+                        <div className="flex flex-col space-y-3">
+                            <button
+                                onClick={executeFinalDelete}
+                                disabled={isDeleting}
+                                className="w-full bg-red-600 hover:bg-red-700 text-white font-bold text-lg py-4 px-4 rounded-xl shadow-lg transition-transform transform hover:scale-[1.02] disabled:opacity-50"
+                            >
+                                {isDeleting ? 'DELETING...' : 'YES, DELETE IT!'}
+                            </button>
+                            <button
+                                onClick={() => setShowFinalDeleteModal(false)}
+                                className="w-full bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold text-lg py-4 px-4 rounded-xl transition-colors"
+                            >
+                                NO
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -170,11 +221,11 @@ function CandidateRow({ candidate }: { candidate: any }) {
                     defaultValue={candidate.status}
                     onChange={handleChangeStatus}
                     className={`block w-full pl-3 pr-10 py-2 text-sm font-semibold border-2 focus:outline-none focus:ring-2 focus:ring-primary rounded-lg transition-all ${candidate.status === 'applied' ? 'bg-blue-50 border-blue-300 text-blue-700' :
-                            candidate.status === 'screening' ? 'bg-yellow-50 border-yellow-300 text-yellow-700' :
-                                candidate.status === 'interview' ? 'bg-purple-50 border-purple-300 text-purple-700' :
-                                    candidate.status === 'offered' ? 'bg-green-50 border-green-300 text-green-700' :
-                                        candidate.status === 'hired' ? 'bg-emerald-50 border-emerald-400 text-emerald-800' :
-                                            'bg-red-50 border-red-300 text-red-700'
+                        candidate.status === 'screening' ? 'bg-yellow-50 border-yellow-300 text-yellow-700' :
+                            candidate.status === 'interview' ? 'bg-purple-50 border-purple-300 text-purple-700' :
+                                candidate.status === 'offered' ? 'bg-green-50 border-green-300 text-green-700' :
+                                    candidate.status === 'hired' ? 'bg-emerald-50 border-emerald-400 text-emerald-800' :
+                                        'bg-red-50 border-red-300 text-red-700'
                         }`}
                 >
                     <option value="applied" className="bg-blue-50 text-blue-700">📋 Applied</option>
