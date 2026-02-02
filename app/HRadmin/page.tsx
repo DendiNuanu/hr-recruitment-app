@@ -1,7 +1,8 @@
 import { createClientServer } from '@/lib/supabase';
 import Link from 'next/link';
 import { AdminJobCard } from './AdminJobCard';
-import { ExportImportButtons } from './ExportImportButtons';
+import { ExportSection } from './ExportSection';
+import { ImportSection } from './ImportSection';
 
 export const revalidate = 0;
 
@@ -18,8 +19,13 @@ export default async function AdminDashboard() {
                 </Link>
             </div>
 
-            {/* Export/Import Section */}
-            <ExportImportButtons />
+            {/* Export Section */}
+            <ExportSection />
+
+            {/* Import Section */}
+            <ImportSection />
+
+
 
             <div className="bg-white shadow overflow-hidden sm:rounded-md">
                 <ul className="divide-y divide-gray-200">

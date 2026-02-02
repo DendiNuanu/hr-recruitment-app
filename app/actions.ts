@@ -208,11 +208,13 @@ export async function updateJobStatus(jobId: string, status: string) {
 }
 
 // Export/Import Actions
+import Papa from 'papaparse';
+
 export async function exportJobsAction() {
     const adminSupabase = createAdminClient()
     const { data: jobs, error } = await adminSupabase
         .from('jobs')
-        .select('*, candidates(*)')
+        .select('*, candidates(id)')
         .order('created_at', { ascending: false })
 
     if (error) return { error: error.message }
@@ -225,6 +227,7 @@ export async function exportJobsAction() {
         location: job.location,
         description: job.description,
         status: job.status,
+        job_image: job.job_image || '', // Include image URL in export
         created_at: job.created_at,
         applicants_count: job.candidates?.length || 0
     })) || []
@@ -254,10 +257,11 @@ export async function exportCandidatesAction() {
     // Transform data for export
     const exportData = candidates?.map((candidate: any) => ({
         id: candidate.id,
+        job_id: candidate.job_id, // Added for re-import capability
         job_title: candidate.jobs?.title || 'N/A',
         full_name: candidate.full_name,
         email: candidate.email,
-        phone: `="${candidate.phone}"`, // Force Excel to treat as string
+        phone: candidate.phone ? `="${candidate.phone}"` : '', // Force Excel to treat as string if exists
         status: candidate.status,
         notes: candidate.notes || '',
         resume_url: candidate.resume_url,
@@ -266,51 +270,179 @@ export async function exportCandidatesAction() {
 
     return { success: true, data: exportData }
 }
+import * as XLSX from 'xlsx';
 
 export async function importJobsAction(formData: FormData) {
     const file = formData.get('file') as File
     if (!file) return { error: 'No file provided' }
 
-    try {
-        const text = await file.text()
-        const jobs = JSON.parse(text)
+    let jobs: any[] = []
 
-        if (!Array.isArray(jobs)) {
-            return { error: 'Invalid file format. Expected an array of jobs.' }
+    try {
+        const buffer = await file.arrayBuffer();
+
+        // 1. Check if it's an Excel file (XLSX/XLS)
+        if (file.name.match(/\.(xlsx|xls)$/i)) {
+            try {
+                const workbook = XLSX.read(buffer, { type: 'array' });
+                const firstSheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert to JSON
+                jobs = XLSX.utils.sheet_to_json(worksheet, {
+                    raw: false, // Parse dates as strings if possible
+                    defval: ''  // Default value for empty cells
+                });
+
+                console.log("Parsed XLSX, rows:", jobs.length);
+            } catch (e: any) {
+                return { error: `Failed to parse Excel file: ${e.message}` }
+            }
+        } else {
+            // 2. Fallback to Text/CSV processing
+            const text = await file.text()
+
+            // Check for binary garbage (in case they renamed .xlsx to .csv)
+            if (text.slice(0, 100).includes('\u0000')) {
+                // Try parsing as Excel anyway if renaming happened?
+                try {
+                    const workbook = XLSX.read(buffer, { type: 'array' });
+                    const firstSheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[firstSheetName];
+                    jobs = XLSX.utils.sheet_to_json(worksheet, { raw: false, defval: '' });
+                } catch (e) {
+                    return { error: 'File appears to be binary/Excel but has .csv extension. Please upload as .xlsx' }
+                }
+            } else if (text.trim().startsWith('[') || text.trim().startsWith('{')) {
+                try {
+                    jobs = JSON.parse(text)
+                    if (!Array.isArray(jobs)) return { error: 'Invalid JSON format.' }
+                } catch (e) { return { error: 'Invalid JSON file.' } }
+            } else {
+                // Handle BOM
+                const cleanText = text.replace(/^\uFEFF/, '');
+
+                const parsed = Papa.parse(cleanText, {
+                    header: true,
+                    skipEmptyLines: true,
+                    transformHeader: (h) => h.trim()
+                })
+
+                if (parsed.meta.fields && parsed.meta.fields.length < 2) {
+                    return { error: `CSV Parsing Failed. Found only 1 column (${parsed.meta.fields[0]}). Ensure delimiter is Comma (,)` }
+                }
+
+                if (parsed.errors && parsed.errors.length > 0) {
+                    const firstError = parsed.errors[0];
+                    // Strict error usually? Let's be lenient if we got data.
+                    if (parsed.errors[0].code !== 'TooManyFields' && parsed.errors[0].code !== 'TooFewFields') {
+                        return { error: `CSV Syntax Error Row ${firstError.row}: ${firstError.message}` }
+                    }
+                }
+
+                jobs = parsed.data
+            }
         }
+
+        // Debug Info
+        const totalRowsFound = jobs.length;
 
         const adminSupabase = createAdminClient()
         let imported = 0
+        let updated = 0
+        let skipped = 0
         let errors = 0
+        let errorDetails: string[] = []
 
-        for (const job of jobs as any[]) {
-            // Validate required fields
+        // Fetch existing jobs for deduplication
+        const { data: existingJobsData } = await adminSupabase.from('jobs').select('id, title')
+        const existingJobIds = new Set(existingJobsData?.map((j: any) => j.id))
+        const existingJobTitles = new Set(existingJobsData?.map((j: any) => j.title.toLowerCase().trim()))
+
+        let actionLog: string[] = []
+
+        for (let index = 0; index < jobs.length; index++) {
+            const job = jobs[index];
+            const rowNum = index + 2;
+
+            // Allow sloppy keys (trim/lowercase keys if needed) - PapaParse headers are case sensitive usually
+            // We assume standard keys: title, department, location
+
             if (!job.title || !job.department || !job.location) {
+                // If the row is totally empty or malformed
+                const keysFound = Object.keys(job).filter(k => job[k]).join(', ');
+                if (keysFound.length === 0) continue; // Skip completely empty rows
+
                 errors++
+                errorDetails.push(`Row ${rowNum}: Missing required fields (Needs title, department, location). Found: ${keysFound}`)
                 continue
             }
 
-            const { error } = await adminSupabase.from('jobs').insert({
-                title: job.title,
+            const normalizedTitle = job.title.trim()
+
+            // Logic:
+            // 1. If ID matches -> Update (Upsert)
+            // 2. If ID missing but Title matches -> Skip (Duplicate prevention)
+            // 3. Else -> Insert
+
+            // Construct payload safely
+            const jobPayload: any = {
+                title: normalizedTitle,
                 department: job.department,
                 location: job.location,
                 description: job.description || '',
-                status: job.status || 'open',
-                job_image: job.job_image || null
-            })
+                status: job.status || 'open'
+            }
+            // CRITICAL FIX: Only update image if column exists and is not undefined.
+            // If user explicitly clears it, they should send empty string?
+            // For safety, let's only update if it is a non-empty string, or if the key explicitly exists.
+            if (job.job_image !== undefined && job.job_image !== '') {
+                jobPayload.job_image = job.job_image
+            }
 
-            if (error) {
-                errors++
+            if (job.id && existingJobIds.has(job.id)) {
+                // Update existing
+                const { error } = await adminSupabase.from('jobs').update(jobPayload).eq('id', job.id)
+
+                if (error) {
+                    errors++; errorDetails.push(`Row ${rowNum}: Update failed - ${error.message}`)
+                    actionLog.push(`Row ${rowNum}: Update Failed`)
+                } else {
+                    updated++
+                    actionLog.push(`Row ${rowNum}: Updated "${normalizedTitle}"`)
+                }
+            } else if (existingJobTitles.has(normalizedTitle.toLowerCase())) {
+                // Skip duplicate by title if no ID provided (or ID mismatch)
+                skipped++
+                actionLog.push(`Row ${rowNum}: Skipped Duplicate "${normalizedTitle}"`)
+                // errorDetails.push(`Row ${rowNum}: Skipped duplicate title "${normalizedTitle}"`)
             } else {
-                imported++
+                // Insert new
+                const { error } = await adminSupabase.from('jobs').insert(jobPayload)
+                if (error) {
+                    errors++; errorDetails.push(`Row ${rowNum}: Insert failed - ${error.message}`)
+                    actionLog.push(`Row ${rowNum}: Insert Failed`)
+                } else {
+                    imported++
+                    actionLog.push(`Row ${rowNum}: Inserted "${normalizedTitle}"`)
+                }
             }
         }
 
         revalidatePath('/HRadmin')
-        return {
-            success: true,
-            message: `Imported ${imported} jobs successfully${errors > 0 ? `, ${errors} failed` : ''}`
+
+        // Detailed message
+        const lastJob = jobs.length > 0 ? jobs[jobs.length - 1].title : 'None';
+        let message = `File: "${file.name}". Found ${totalRowsFound} rows. Last Job in File: "${lastJob}".\nProcessed: ${imported} added, ${updated} updated, ${skipped} duplicate/skipped.`;
+
+        if (errors > 0 || actionLog.length > 0) {
+            // Include specific action logs for debugging
+            const logSummary = actionLog.join('; ');
+            const errSummary = errors > 0 ? ` Errors: ${errorDetails.slice(0, 3).join('; ')}` : '';
+            message += ` [Details: ${logSummary}${errSummary}]`
         }
+
+        return { success: true, message: message }
     } catch (e: any) {
         return { error: e.message || 'Failed to import jobs' }
     }
@@ -321,48 +453,158 @@ export async function importCandidatesAction(formData: FormData) {
     if (!file) return { error: 'No file provided' }
 
     try {
-        const text = await file.text()
-        const candidates = JSON.parse(text)
+        const buffer = await file.arrayBuffer();
+        let candidates: any[] = []
 
-        if (!Array.isArray(candidates)) {
-            return { error: 'Invalid file format. Expected an array of candidates.' }
+        // 1. Check if it's an Excel file (XLSX/XLS)
+        if (file.name.match(/\.(xlsx|xls)$/i)) {
+            try {
+                const workbook = XLSX.read(buffer, { type: 'array' });
+                const firstSheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[firstSheetName];
+
+                candidates = XLSX.utils.sheet_to_json(worksheet, {
+                    raw: false,
+                    defval: ''
+                });
+            } catch (e: any) {
+                return { error: `Failed to parse Excel file: ${e.message}` }
+            }
+        } else {
+            // Fallback CSV
+            const text = await file.text()
+            if (text.slice(0, 100).includes('\u0000')) {
+                try {
+                    const workbook = XLSX.read(buffer, { type: 'array' });
+                    const firstSheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[firstSheetName];
+                    candidates = XLSX.utils.sheet_to_json(worksheet, { raw: false, defval: '' });
+                } catch (e) {
+                    return { error: 'File appears to be binary/Excel but has .csv extension. Please upload as .xlsx' }
+                }
+            } else if (text.trim().startsWith('[') || text.trim().startsWith('{')) {
+                try {
+                    candidates = JSON.parse(text)
+                    if (!Array.isArray(candidates)) return { error: 'Invalid JSON format.' }
+                } catch (e) { return { error: 'Invalid JSON file.' } }
+            } else {
+                const cleanText = text.replace(/^\uFEFF/, '');
+                const parsed = Papa.parse(cleanText, { header: true, skipEmptyLines: true, transformHeader: (h) => h.trim() })
+                if (parsed.meta.fields && parsed.meta.fields.length < 2) return { error: `CSV Parsing Failed. Found only 1 column.` }
+                if (parsed.errors && parsed.errors.length > 0 && parsed.errors[0].code !== 'TooManyFields') {
+                    return { error: `CSV Parsing Error Row ${parsed.errors[0].row}: ${parsed.errors[0].message}` }
+                }
+                candidates = parsed.data
+            }
         }
 
         const adminSupabase = createAdminClient()
         let imported = 0
+        let updated = 0
+        let skipped = 0
         let errors = 0
+        let errorDetails: string[] = []
 
-        for (const candidate of candidates as any[]) {
-            // Validate required fields
-            if (!candidate.full_name || !candidate.email || !candidate.job_id) {
-                errors++
-                continue
+        // Fetch verification data
+        const { data: allJobs } = await adminSupabase.from('jobs').select('id, title');
+        // Robust Map: Key = Trimmed Lowercase Title, Value = ID
+        const jobMap = new Map(allJobs?.map((j: any) => [j.title?.trim().toLowerCase(), j.id]) || []);
+
+        // Fetch existing candidates for deduplication (by ID usually)
+        const { data: existingCandidatesData } = await adminSupabase.from('candidates').select('id, email, job_id');
+        const existingCandidateIds = new Set(existingCandidatesData?.map((c: any) => c.id));
+
+        // Complex duplicated check: Map key "email|job_id" -> candidate_id
+        const processedKeys = new Set(existingCandidatesData?.map((c: any) => `${c.email?.toLowerCase()}|${c.job_id}`));
+
+        for (let index = 0; index < candidates.length; index++) {
+            const candidate = candidates[index];
+            const rowNum = index + 2;
+            let jobId = candidate.job_id;
+            const jobTitleRaw = candidate.job_title;
+
+            // 1. Resolve Job ID
+            if (!jobId && jobTitleRaw) {
+                // Aggressively clean title
+                const lookupTitle = String(jobTitleRaw).trim().toLowerCase();
+                jobId = jobMap.get(lookupTitle);
+
+                if (!jobId) {
+                    errorDetails.push(`Row ${rowNum}: Job '${jobTitleRaw}' not found. Checked against: ${Array.from(jobMap.keys()).join(', ')}`);
+                    errors++;
+                    continue; // Cannot proceed without Job ID
+                }
+            } else if (!jobId) {
+                // Check if completely empty row
+                if (!candidate.full_name && !candidate.email) continue;
+
+                errors++; errorDetails.push(`Row ${rowNum}: Missing Job ID or Job Title`);
+                continue;
             }
 
-            const { error } = await adminSupabase.from('candidates').insert({
-                job_id: candidate.job_id,
+            // 2. Clean Phone
+            let phone = candidate.phone || '';
+            if (typeof phone === 'string' && phone.startsWith('="') && phone.endsWith('"')) {
+                phone = phone.slice(2, -1);
+            }
+
+            // 3. Validation
+            const email = candidate.email?.trim().toLowerCase();
+            if (!candidate.full_name || !email) {
+                errors++; errorDetails.push(`Row ${rowNum}: Missing Name or Email`);
+                continue;
+            }
+
+            // 4. Deduplication / Upsert Logic
+            const duplicateKey = `${email}|${jobId}`;
+
+            const candidatePayload: any = {
+                job_id: jobId,
                 full_name: candidate.full_name,
-                email: candidate.email.toLowerCase(),
-                phone: candidate.phone || '',
-                resume_url: candidate.resume_url || '',
+                email: email,
+                phone: phone,
                 notes: candidate.notes || '',
                 status: candidate.status || 'applied'
-            })
+            }
+            if (candidate.resume_url) candidatePayload.resume_url = candidate.resume_url;
 
-            if (error) {
-                errors++
+            if (candidate.id && existingCandidateIds.has(candidate.id)) {
+                // UPDATE existing by ID
+                const { error } = await adminSupabase.from('candidates').update(candidatePayload).eq('id', candidate.id)
+
+                if (error) { errors++; errorDetails.push(`Row ${rowNum}: Update Error - ${error.message}`) }
+                else {
+                    updated++;
+                    processedKeys.add(duplicateKey);
+                }
+
+            } else if (processedKeys.has(duplicateKey)) {
+                // SKIP Duplicate
+                skipped++;
             } else {
-                imported++
+                // INSERT New
+                const { error } = await adminSupabase.from('candidates').insert(candidatePayload)
+
+                if (error) { errors++; errorDetails.push(`Row ${rowNum}: Insert Error - ${error.message}`) }
+                else {
+                    imported++;
+                    processedKeys.add(duplicateKey);
+                }
             }
         }
 
         revalidatePath('/HRadmin')
-        return {
-            success: true,
-            message: `Imported ${imported} candidates successfully${errors > 0 ? `, ${errors} failed` : ''}`
+
+        let message = `File: "${file.name}". Processed candidates: ${imported} added, ${updated} updated, ${skipped} skipped.`;
+        if (errors > 0) {
+            const details = errorDetails.slice(0, 3).join('; ');
+            message += ` (${errors} errors: ${details}...)`;
         }
+
+        return { success: true, message: message }
     } catch (e: any) {
         return { error: e.message || 'Failed to import candidates' }
     }
 }
+
 
